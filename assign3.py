@@ -4,7 +4,12 @@ import threading
 import socket
 import struct
 
-
+##### ### ###
+##TODO  #####
+#### ###  ###
+## subnet?
+## IP encoding/decoding/fragmentation
+## listening thread!
 
 localhost = '127.0.0.1'
 HEADERSIZE = 20 #total header size is 20 bytes
@@ -15,6 +20,7 @@ SET = False
 class Connection:
     def __init__(self, host, port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        #must be non-blocking to be able to send and receive
         self.sock.setblocking(False)
         self.sock.bind((host, port))
         self.MTU = MTU
@@ -59,10 +65,15 @@ class IPv4Header:
     def __init__(self, header):
         pass
 
+#this will make an IP packet with known header/payload
 class IPv4Packet:
     #raw format is a byte string?
-    def __init__(self, rawformat):
+    def __init__(self, flags):
         pass
+
+#takes a packet byte string and parses it into a packet object
+def parsePacket(rawFormat):
+    pass
 
 #gateway commands
 def gw(args, network = None):
