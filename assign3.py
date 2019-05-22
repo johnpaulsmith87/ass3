@@ -35,14 +35,15 @@ class Connection:
 
 
 class Network:
-    def __init__(self, connection, ipaddr):
+    def __init__(self, connection, ipaddr, subnet = None):
         self.connection = connection
         self.ARPTable = {}
         self.subnet = None
         self.gateway = None
+
     def setGW(self, gateway):
         self.gateway = gateway
-    def getGW(self, gateway):
+    def getGW(self):
         return self.gateway
     
     def setMTU(self, mtu):
@@ -66,18 +67,16 @@ class IPv4Packet:
 #gateway commands
 def gw(args, network = None):
     if args[0] == 'set':
-        pass
+        network.gateway = args[1]
         return SET
     elif args[0] == 'get':
-        pass
         return GET
 #arp commands
 def arp(args, network = None):
     if args[0] == 'set':
-        pass
+        network.ARPTable[args[1]] = args[2]
         return SET
     elif args[0] == 'get':
-        pass
         return GET
 #mtu commands
 def mtu(args, network = None):
@@ -101,7 +100,14 @@ def printToScreen(context, network, message = None):
     elif context == 'mtu':
         print(network.getMTU())
     elif context == 'arp':
-        pass         #look in ARP table for (use msg to pass on?)
+        if message[0] in network.ARPTable.keys():
+            print(network.ARPTable[message[0]])
+        else:
+            print("None")
+    elif context == 'msg':
+        pass
+
+
 CommandsToActions = {
     'gw': gw,
     'arp': arp,
@@ -115,8 +121,11 @@ def main():
     args = sys.argv
     #ipaddr = sys.argv[1]
     #lladdr = sys.argv[2]
-    ipaddr = "192.168.1.1/24" #debug only values
+    networkAddr = "192.168.1.1/24" #debug only values
     lladdr = "1024"
+    temp = networkAddr.split('/')
+    ipaddr = temp[0]
+    subnet = temp[1]
     ## start listening thread -> this needs to be active the whole time!
     ## we'll add this later
     ## after lannching that thread, begin accepting console input.
@@ -126,11 +135,11 @@ def main():
     ####################
     #Initialise Network#
     ####################
-    connection = Connection(localhost, lladdr)
+    connection = Connection(localhost, int(lladdr))
     ###############
     #Listen Thread#
     ###############
-    network = Network(connection, ipaddr)
+    network = Network(connection, ipaddr, subnet)
     network.ARPTable[ipaddr] = lladdr #add entry to ARP? Not sure if needed yet
     #####
     #CLI#
@@ -138,7 +147,7 @@ def main():
     while True:
         userInput = input("> ")
         splitInput = userInput.split()
-        if splitInput[0] in CommandsToActions.keys():
+        if splitInput is not None and len(splitInput) > 0 and splitInput[0] in CommandsToActions.keys():
            isGET = CommandsToActions[splitInput[0]](splitInput[1:], network)
            if isGET:
                printToScreen(splitInput[0], network, splitInput)
