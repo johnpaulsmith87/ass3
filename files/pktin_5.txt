@@ -1,0 +1,2 @@
+IPv4(src=10.0.0.1, dst=10.0.0.9, flags=0, proto=0, payload="Hello")
+IPv4(src=10.0.0.1, dst=10.0.0.9, flags=0, proto=1, payload="Hello")

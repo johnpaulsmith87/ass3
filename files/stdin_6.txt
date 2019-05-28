@@ -1,0 +1,5 @@
+mtu get
+mtu set 1600
+mtu get
+exit
+

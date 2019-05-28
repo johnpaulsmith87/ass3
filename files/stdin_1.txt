@@ -1,0 +1,5 @@
+arp set 10.0.0.1 1234
+arp get 10.0.0.1
+arp get 10.0.0.2
+exit
+
