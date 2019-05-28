@@ -3,6 +3,7 @@ import sys
 import threading
 import socket
 import struct
+import math
 
 ##### ### ###
 ##TODO  #####
@@ -47,7 +48,7 @@ def getSubnetMask(cidr):
 
 def messageToPackets(destination, source, msg, mtu):
     packets = []
-    msgBytes = msg.encode('utf-8')
+    msgBytes = bytes(msg, 'utf-8')
     rawMsgLength = len(msgBytes)
     totalLength = rawMsgLength + HEADERSIZE
     chunks = chunkInt(totalLength, mtu - HEADERSIZE)
@@ -58,7 +59,8 @@ def messageToPackets(destination, source, msg, mtu):
             df = 1
         if len(chunks) > 1 and df != 1:
              mf = 1
-        header = IPv4Header(1, df, mf, ((mtu - HEADERSIZE)/8)*i, totalLength, destination, source)
+        offset = math.ceil((mtu - HEADERSIZE)/8)*i
+        header = IPv4Header(1, df, mf, offset, totalLength, destination, source)
         pkt = IPv4Packet(header, msgBytes)
         packets.append(pkt)
     return packets
@@ -160,7 +162,7 @@ class IPv4Header:
         result[4] |= self.dest.getInt()
         result[3] |= self.src.getInt()
         result[2] |= self.ttl << (31 - 7)
-        result[2] |= self.protocol (31 - 15)
+        result[2] |= self.protocol << (31 - 15)
         result[1] |= self.fragoffset
         result[1] |= self.df << (31 - 18)
         result[1] |= self.mf << (31 - 17)
@@ -168,7 +170,24 @@ class IPv4Header:
         result[0] |= self.totalLength
         result[0] |= self.ihl << (31 - 7)
         result[0] |= self.version << (31 - 3)
-        return bytes(result)
+
+        byts = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        for i in range(len(result)):
+            for j in range(4):
+                mask = 0
+                if j == 0:
+                    mask = int('ff000000', 16)
+                    byts[(4*i) + j] = (result[i] & mask) >> 24
+                elif j == 1:
+                    mask = int('00ff0000', 16)
+                    byts[(4*i) + j] = (result[i] & mask) >> 16
+                elif j == 2:
+                    mask = int('0000ff00', 16)
+                    byts[(4*i) + j] = (result[i] & mask) >> 8
+                elif j == 3:
+                    mask = int('000000ff', 16)    
+                    byts[(4*i) + j] = (result[i] & mask)
+        return bytearray(byts)
 
         
 
@@ -179,26 +198,32 @@ class IPv4Packet:
         self.header = header
         self.payload = payload
     def getBytes(self):
-        return bytearray(self.payload).append(self.header.getHeader())
+        h = self.header.getHeader() + self.payload
+        return h
 
 
-#takes a packet byte string and parses it into a packet object
+#takes a packet byte array and parses it into a packet object
 def parsePacket(rawFormat):
-    header = rawFormat[0:20] #first 20 bytes -> header
-    payload = rawFormat[20:]
-    row1 = header[0:4]
-    row2 = header[4:8]
-    row3 = header[8:12]
-    source = int.from_bytes(header[12:16], 'big')
-    dest = int.from_bytes(header[16:20], 'big')
-    Id = int.from_bytes(row2[0:2])
-    mf = int.from_bytes(row2[2]) >> 6
-    df = int.from_bytes(row2[2]) >> 5
-    protocol = int.from_bytes(row3[1])
-    fragoffset = int.from_bytes(row1[2:4]) & int('1fff', 16)
-    totalLength = int.from_bytes(row1[2:4])
-    ipHeader = IPv4Header(Id, df, mf, fragoffset, totalLength, source, dest, protocol)
-    pkt = IPv4Packet(ipHeader, payload)
+    pkt = None
+    try:
+        header = rawFormat[0:20] #first 20 bytes -> header
+        payload = rawFormat[20:]
+        row1 = header[0:4]
+        row2 = header[4:8]
+        row3 = header[8:12]
+        source = int.from_bytes(header[12:16], 'big')
+        dest = int.from_bytes(header[16:20], 'big')
+        Id = int.from_bytes(row2[0:2], 'big')
+        mf = row2[2] >> 6 & int('1', 16)
+        df = row2[2] >> 5 & int('1', 16)
+        protocol = row3[1]
+        fragoffset = int.from_bytes(row2[2:4], 'big') & int('1fff', 16)
+        totalLength = int.from_bytes(row1[2:4], 'big')
+        ipHeader = IPv4Header(Id, df, mf, fragoffset, totalLength, source, dest, protocol)
+        pkt = IPv4Packet(ipHeader, payload)
+    except:
+        pass
+    
     return pkt
 
 
@@ -237,9 +262,9 @@ def msg(args, network):
             print("No ARP entry found")
             return
         #construct the packet(s) and send to socket!
-        pkts = messageToPackets(receiver, network.address, args[1][1:-1], network.getMTU())
+        pkts = messageToPackets(receiver, network.address, "".join(args[1:])[1:-1], network.getMTU())
         #then send to port in ARP
-        network.connection.send_packets(pkts, )
+        network.connection.send_packets([x.getBytes() for x in pkts], (localhost, int(network.ARPTable[args[0]])))
 
     else:
         #first check for gw set
@@ -249,9 +274,9 @@ def msg(args, network):
         if network.getGW() not in network.ARPTable.keys():
             print("No ARP entry found")
             return
-        pkts = messageToPackets(receiver, network.address, args[1][1:-1], network.getMTU())
+        pkts = messageToPackets(receiver, network.address, "".join(args[1:])[1:-1], network.getMTU())
         #but don't send to port from ARP, send to gw port
-
+        network.connection.send_packets([x.getBytes() for x in pkts], (localhost, int(network.ARPTable[network.getGW()])))
 
 #type is gw, arp, exit, etc...
 #network to get the data
@@ -261,8 +286,8 @@ def printToScreen(context, network, message = None):
     elif context == 'mtu':
         print(network.getMTU())
     elif context == 'arp':
-        if message[0] in network.ARPTable.keys():
-            print(network.ARPTable[message[0]])
+        if message[2] in network.ARPTable.keys():
+            print(network.ARPTable[message[2]])
         else:
             print("None")
     elif context == 'msg':
@@ -282,7 +307,7 @@ def main():
     args = sys.argv
     #ipCIDR = sys.argv[1]
     #lladdr = sys.argv[2]
-    ipCIDR = "203.0.113.16/28" #debug only values
+    ipCIDR = "192.168.1.1/24" #debug only values
     lladdr = "1024"
     temp = ipCIDR.split('/')
     ipaddr = temp[0]
