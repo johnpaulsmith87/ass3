@@ -12,7 +12,7 @@ import math
 ## IP encoding/decoding/fragmentation
 ## listening thread!
 
-localhost = '127.0.0.1'
+localhost = 'localhost'
 HEADERSIZE = 20 #total header size is 20 bytes
 MTU = 1500
 GET = True
@@ -35,7 +35,7 @@ def chunkInt(m, n):
         else:
             chunk.append(m)
             return chunk
-        
+
 #given a prefix, will return a 32 bit int of (4 bytes) which is the subnet mask
 def getSubnetMask(cidr):
     mask = 0
@@ -52,19 +52,23 @@ def messageToPackets(destination, source, msg, mtu):
     rawMsgLength = len(msgBytes)
     totalLength = rawMsgLength + HEADERSIZE
     chunks = chunkInt(totalLength, mtu - HEADERSIZE)
+    lastChunk = 0
     for i in range(len(chunks)):
         df = 0
         mf = 0
+        '''
         if i == len(chunks) - 1:
             df = 1
+        '''
         if len(chunks) > 1 and df != 1:
-             mf = 1
+            mf = 1
         offset = math.ceil((mtu - HEADERSIZE)/8)*i
-        header = IPv4Header(1, df, mf, offset, totalLength, destination, source)
-        pkt = IPv4Packet(header, msgBytes)
+        header = IPv4Header(1, df, mf, offset, chunks[i] + HEADERSIZE, source, destination)
+        pkt = IPv4Packet(header, msgBytes[lastChunk:lastChunk+chunks[i]])
         packets.append(pkt)
+        lastChunk += chunks[i] 
     return packets
-    
+
 
 #takes a string and does all the necessary stuff
 class IPAddress:
@@ -74,7 +78,7 @@ class IPAddress:
 
     def getString(self):
         return '.'.join([str(x) for x in self.sequence])
-    
+
     def getBytes(self):
         return bytes(self.sequence)
     #converts ip in list to ip as int (for use in bin arith)
@@ -83,7 +87,7 @@ class IPAddress:
         for i in range(4):
             result |= (self.sequence[i] << 24-(i*8))
         return result
-    
+
 def IPAddressFromInt(ip):
     first = (ip & int('0xFF000000', 16)) >> (31 - 7)
     second = (ip & int('0x00FF0000', 16)) >> (31 - 15)
@@ -103,12 +107,13 @@ class Connection:
     def close(self):
         self.sock.close()
     def get_packet(self):
-        result = self.sock.recvfrom(MTU)
+        result = self.sock.recvfrom(self.MTU)
         return result
     #will use send_packets to call this multiple times
     def send_packet(self, packet, address):
-        sent = self.sock.sendto(packet, address)
-    
+        with threading.Lock() as lock:
+            sent = self.sock.sendto(packet, address)
+
     def send_packets(self, packets, address):
         for packet in packets:
             self.send_packet(packet, address)
@@ -124,14 +129,14 @@ class Network:
         self.gateway = None
         self.address = IPAddress(ipaddr)
         self.networkAddr = IPAddressFromInt(self.address.getInt() & self.subnetMask.getInt())
-        self.broadcast = IPAddressFromInt(self.networkAddr.getInt() | (~self.subnetMask.getInt())) 
+        self.broadcast = IPAddressFromInt(self.networkAddr.getInt() | (~self.subnetMask.getInt()))
 
 
     def setGW(self, gateway):
         self.gateway = gateway
     def getGW(self):
         return self.gateway
-    
+
     def setMTU(self, mtu):
         self.connection.MTU = mtu
     def getMTU(self):
@@ -140,7 +145,7 @@ class Network:
     def isInNetwork(self, ip):
         return ip.getInt() > self.networkAddr.getInt() and ip.getInt() < self.broadcast.getInt()
 
-    
+
 
 class IPv4Header:
     def __init__(self, Id, df, mf, fragoffset, totalLength, src, dest, protocol = 0):
@@ -185,11 +190,11 @@ class IPv4Header:
                     mask = int('0000ff00', 16)
                     byts[(4*i) + j] = (result[i] & mask) >> 8
                 elif j == 3:
-                    mask = int('000000ff', 16)    
+                    mask = int('000000ff', 16)
                     byts[(4*i) + j] = (result[i] & mask)
         return bytearray(byts)
 
-        
+
 
 #this will make an IP packet with known header/payload
 class IPv4Packet:
@@ -223,7 +228,7 @@ def parsePacket(rawFormat):
         pkt = IPv4Packet(ipHeader, payload)
     except:
         pass
-    
+
     return pkt
 
 
@@ -253,16 +258,16 @@ def exitCommand(args, network=None):
     exit()
 def msg(args, network):
     #generate message in IPv4 format? and send to specified port (using table)
-    
+
     #check if ip is in ARP table?
     receiver = IPAddress(args[0])
-    
+
     if network.isInNetwork(receiver):
         if args[0] not in network.ARPTable.keys():
             print("No ARP entry found")
             return
         #construct the packet(s) and send to socket!
-        pkts = messageToPackets(receiver, network.address, "".join(args[1:])[1:-1], network.getMTU())
+        pkts = messageToPackets(receiver, network.address, " ".join(args[1:])[1:-1], network.getMTU())
         #then send to port in ARP
         network.connection.send_packets([x.getBytes() for x in pkts], (localhost, int(network.ARPTable[args[0]])))
 
@@ -274,7 +279,7 @@ def msg(args, network):
         if network.getGW() not in network.ARPTable.keys():
             print("No ARP entry found")
             return
-        pkts = messageToPackets(receiver, network.address, "".join(args[1:])[1:-1], network.getMTU())
+        pkts = messageToPackets(receiver, network.address, " ".join(args[1:])[1:-1], network.getMTU())
         #but don't send to port from ARP, send to gw port
         network.connection.send_packets([x.getBytes() for x in pkts], (localhost, int(network.ARPTable[network.getGW()])))
 
@@ -293,22 +298,106 @@ def printToScreen(context, network, message = None):
     elif context == 'msg':
         pass
 
+#called my listenint thread
+
+def checkPackets(pkts, mtu):
+    #simplest case
+    packs = sorted(pkts, key=lambda pkt: pkt.header.fragoffset)
+    if len(packs) == 1 and packs[0].header.mf == 0 and packs[0].header.fragoffset == 0:
+        return True
+    if len(packs) > 1:
+        #check last packet - if it doesn't have mf = 0, we're not done!
+        if packs[-1].header.mf != 0:
+            return False
+        #now if last pkt is the last pkt we're expecting, we need to
+        #check frag offsets to ensure that each frag is there
+        j = 0
+        for i in range(len(packs)):
+            expectedOffset = j * int((mtu - HEADERSIZE)/8)
+            j += 1
+            if packs[i].header.fragoffset != expectedOffset:
+                return False
+        return True
+    return False
+
+def generateMessage(pkts):
+    packs = sorted(pkts, key=lambda pack:pack.header.fragoffset)
+    ## concatenate each payload
+    payloads = b''.join([x.payload for x in packs])
+    payloads = str(payloads, 'utf-8')
+    ## check protocol of 1?e
+    protocol = packs[0].header.protocol
+    src = IPAddressFromInt(packs[0].header.src)
+    print('\b\b', end="", flush=True)
+    if protocol == 0: 
+        print("Message received from %s: \"%s\"" % (src.getString(), payloads))
+        sys.stdout.flush()
+    else:
+        h = hex(protocol)[2:].zfill(2)
+        h = '0x' + h
+        print("Message received from %s with protocol %s" % (src.getString(), h))
+        sys.stdout.flush()
+    print('> ', end="", flush=True)
+
+
+    
+    
+
+def listen(network):
+    runningDict = {} #dict( ip -> dict(id -> list))
+    while True:
+        try:
+            incoming = None
+            with threading.Lock() as lock:
+                incoming = network.connection.get_packet()
+            if incoming is not None:
+                pkt = parsePacket(incoming[0])
+                #check if ip is in dict
+                if pkt.header.src not in runningDict.keys():
+                    runningDict[pkt.header.src] = {}
+                    runningDict[pkt.header.src][pkt.header.id] = []
+                    runningDict[pkt.header.src][pkt.header.id].append(pkt)
+                elif pkt.header.id not in runningDict[pkt.header.src].keys():
+                    runningDict[pkt.header.src][pkt.header.id] = []
+                    runningDict[pkt.header.src][pkt.header.id].append(pkt)
+                else:
+                    runningDict[pkt.header.src][pkt.header.id].append(pkt)
+                #check list to see if msg is ready to display
+                if checkPackets(runningDict[pkt.header.src][pkt.header.id], network.getMTU()):
+                    #>> reconstruct message and print
+                    generateMessage(runningDict[pkt.header.src][pkt.header.id])
+                    runningDict[pkt.header.src][pkt.header.id].clear()
+                    #display message
+            else:
+                continue
+        except socket.timeout as e:
+            #no recv ->> just loop man!
+            pass
+        except socket.error as i:
+            #not sure which one gets activated
+            pass
+        except Exception as y:
+            print(y)
+
+
+
 
 CommandsToActions = {
     'gw': gw,
     'arp': arp,
     'mtu': mtu,
-    'exit': exitCommand, 
+    'exit': exitCommand,
     'msg': msg
 }
 
 #main function
 def main():
+    lock = threading.Lock()
     args = sys.argv
-    #ipCIDR = sys.argv[1]
-    #lladdr = sys.argv[2]
     ipCIDR = "192.168.1.1/24" #debug only values
     lladdr = "1024"
+    ipCIDR = sys.argv[1]
+    lladdr = sys.argv[2]
     temp = ipCIDR.split('/')
     ipaddr = temp[0]
     subnet = temp[1]
@@ -317,7 +406,7 @@ def main():
     ## after lannching that thread, begin accepting console input.
     ## console inputs will be a loop that after rcving user input checks it against a dictionary of commands -> functions
     ## the commands will take a list(?) of parameters and be fed to the command function
-    
+
     ####################
     #Initialise Network#
     ####################
@@ -327,7 +416,9 @@ def main():
     ###############
     network = Network(connection, ipaddr, int(subnet))
     network.ARPTable[ipaddr] = lladdr #add entry to ARP? Not sure if needed yet
-
+    #create listen thread and let it run
+    listenThread = threading.Thread(target=listen, args=(network,), daemon=True)
+    listenThread.start()
     #####
     #CLI#
     #####
@@ -335,13 +426,13 @@ def main():
         userInput = input("> ")
         splitInput = userInput.split()
         if splitInput is not None and len(splitInput) > 0 and splitInput[0] in CommandsToActions.keys():
-           isGET = CommandsToActions[splitInput[0]](splitInput[1:], network)
-           if isGET:
-               printToScreen(splitInput[0], network, splitInput)
+            isGET = CommandsToActions[splitInput[0]](splitInput[1:], network)
+            if isGET:
+                printToScreen(splitInput[0], network, splitInput)
         else:
             #invalid command
             continue
-        
+
         ##any after function code
 
 

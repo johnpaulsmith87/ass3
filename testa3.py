@@ -1,7 +1,9 @@
 import subprocess
 import socket
 import os
+import re
 import time
+import random
 
 from scapy.all import IP, raw
 
@@ -16,9 +18,17 @@ PKTOUT_FILE = "files/pktout_{}.txt"
 PKTIN_FILE = "files/pktin_{}.txt"
 
 CLI_IP_ADDR = "10.0.0.9/24"
-CLI_LL_ADDR = 9999
+CLI_LL_ADDR = random.randint(1024, 60000)
 TST_IP_ADDR = "10.0.0.1"
-TST_LL_ADDR = 1234
+TST_LL_ADDR = CLI_LL_ADDR + 1
+
+
+def apply_backspace(string):
+    while True:
+        t = re.sub('.\b', '', string, count=1)
+        if len(string) == len(t):
+            return re.sub('\b+', '', t)
+        string = t
 
 
 def format_pkt_in(text):
@@ -27,7 +37,7 @@ def format_pkt_in(text):
     for pair in text[text.index("(")+1:text.index(")")].split(", "):
         name, _, value = pair.partition("=")
         if name == "payload":
-            payload = value
+            payload = value.strip('"')
             continue
         if value.isdigit():
             value = int(value)
@@ -49,9 +59,9 @@ def compare(name, expected, actual):
     if expected != actual:
         print(f"{name} MATCH FAILED")
         print("EXPECTED:")
-        print(expected)
+        print(repr(expected))
         print("\nGOT:")
-        print(actual)
+        print(repr(actual))
         print()
         return False
     return True
@@ -63,7 +73,7 @@ def run(test_num):
             open(PKTOUT_FILE.format(test_num), "r") as pktout, \
             open(PKTIN_FILE.format(test_num), "r") as pktin:
         out_text = out.read().strip("\n")
-        in_text = inp.read()
+        in_text = inp.read().replace("????", str(TST_LL_ADDR))
         pktout_text = pktout.read().strip("\n")
         pktin_text = pktin.read().strip("\n")
 
@@ -87,7 +97,7 @@ def run(test_num):
 
     proc = subprocess.Popen(path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
 
-    if in_text.strip("\n") != "":
+    if in_text.strip() != "":
         proc.stdin.write(in_text.encode("UTF-8"))
         proc.stdin.flush()
 
@@ -109,9 +119,11 @@ def run(test_num):
     proc.kill()
     actual_stdout = proc.stdout.read().decode("UTF-8").strip("\n")
     actual_stderr = proc.stderr.read().decode("UTF-8").strip("\n")
+    
+    actual_stdout = actual_stdout.replace("\r","")
 
     result = True
-    result = result and compare("STDOUT", out_text, actual_stdout)
+    result = result and compare("STDOUT", out_text, apply_backspace(actual_stdout))
     result = result and compare("STDERR", "", actual_stderr)
     result = result and compare("PKTS", pktout_text, "\n".join(actual_pkts))
     if result:
