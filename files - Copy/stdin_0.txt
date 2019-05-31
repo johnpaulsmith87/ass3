@@ -1,0 +1,4 @@
+gw get
+gw set 10.0.0.1
+gw get
+exit

@@ -55,13 +55,13 @@ def messageToPackets(destination, source, msg, mtu):
     lastChunk = 0
     for i in range(len(chunks)):
         df = 0
-        mf = 0
+        mf = 1
         '''
         if i == len(chunks) - 1:
             df = 1
         '''
-        if len(chunks) > 1 and df != 1:
-            mf = 1
+        if i == len(chunks) - 1:
+            mf = 0
         offset = math.ceil((mtu - HEADERSIZE)/8)*i
         header = IPv4Header(1, df, mf, offset, chunks[i] + HEADERSIZE, source, destination)
         pkt = IPv4Packet(header, msgBytes[lastChunk:lastChunk+chunks[i]])
@@ -219,8 +219,8 @@ def parsePacket(rawFormat):
         source = int.from_bytes(header[12:16], 'big')
         dest = int.from_bytes(header[16:20], 'big')
         Id = int.from_bytes(row2[0:2], 'big')
-        mf = row2[2] >> 6 & int('1', 16)
-        df = row2[2] >> 5 & int('1', 16)
+        mf = row2[2] >> 5 & int('1', 16)
+        df = row2[2] >> 6 & int('1', 16)
         protocol = row3[1]
         fragoffset = int.from_bytes(row2[2:4], 'big') & int('1fff', 16)
         totalLength = int.from_bytes(row1[2:4], 'big')
@@ -376,8 +376,6 @@ def listen(network):
         except socket.error as i:
             #not sure which one gets activated
             pass
-        except Exception as y:
-            print(y)
 
 
 
@@ -392,7 +390,6 @@ CommandsToActions = {
 
 #main function
 def main():
-    lock = threading.Lock()
     args = sys.argv
     ipCIDR = "192.168.1.1/24" #debug only values
     lladdr = "1024"
